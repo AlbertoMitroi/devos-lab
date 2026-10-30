@@ -4,6 +4,23 @@ Design of the lab system used to validate `dotnet-intelligence`, `angular-intell
 
 See [docs/DESIGN.md](docs/DESIGN.md).
 
+## System generation
+
+[`system.yml`](system.yml) describes the lab system for `intelligence-federation`: its five repositories, each with the
+generation it publishes (`oci`), the routes between them and how messages are identified. The `system-context`
+workflow ([`.github/workflows/system-context.yml`](.github/workflows/system-context.yml), script
+[`scripts/system-context.sh`](scripts/system-context.sh)) pulls those generations, federates and verifies them, and
+publishes the system generation as `ghcr.io/albertomitroi/context-devos-lab:system-<key>` and `:main-system`. It runs
+when a lab repository's `context` workflow reports a new generation (`repository_dispatch`, needs the secret
+`DEVOS_LAB_DISPATCH_TOKEN` there) and by hand (`workflow_dispatch`). Layout and key:
+devos-intelligence-federation `docs/PUBLISHING.md`.
+
+Local dry run (Docker and jq; writes an OCI layout under `.system-context/oci` instead of pushing):
+
+```bash
+TARGET=ghcr.io/albertomitroi/context-devos-lab scripts/system-context.sh
+```
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

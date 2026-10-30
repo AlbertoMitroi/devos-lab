@@ -1,0 +1,60 @@
+# Publishes the lab system generation: pulls the generation every lab repository publishes for main
+# (ghcr.io/<owner>/context-devos-lab-*:main-<engine>, listed as `oci` in system.yml), federates and verifies them
+# with intelligence-federation, and pushes the result as ghcr.io/<owner>/context-devos-lab:system-<key> plus the
+# moving tag main-system (layout and key: scripts/system-context.sh; devos-intelligence-federation docs/PUBLISHING.md).
+name: system-context
+
+on:
+  # Sent by the context workflow of each lab repository after it published a generation. A change to system.yml is
+  # published with a manual run (workflow_dispatch).
+  repository_dispatch:
+    types: [context-published]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Push to GHCR (false writes an OCI layout and uploads it as a workflow artifact).
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+# Every run reads the moving main-* tags, so the newest pending run covers the ones it replaces.
+concurrency:
+  group: system-context
+  cancel-in-progress: false
+
+jobs:
+  federate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Trigger
+        env:
+          EVENT: ${{ github.event_name }}
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          echo "event $EVENT"
+          if [ "$EVENT" = repository_dispatch ]; then echo "payload $PAYLOAD"; fi
+
+      - name: Federate, verify and publish
+        id: system
+        env:
+          TARGET: ghcr.io/${{ github.repository_owner }}/context-devos-lab
+          PUSH: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/system-context.sh
+
+      - name: Keep the system generation
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: system-generation
+          path: |
+            .system-context/out/system
+            .system-context/oci
+            .system-context/annotations.json
+          if-no-files-found: ignore
