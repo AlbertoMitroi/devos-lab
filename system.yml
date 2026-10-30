@@ -1,8 +1,8 @@
-# Federation input for the lab system (format: intelligence-federation/docs/PLAN.md, "Inputs").
+# Federation input for the lab system (format: devos-intelligence-federation/docs/PLAN.md, "Inputs").
 # Paths point to where each engine's generation of that repository is placed; the generations do not exist yet.
 # Source commits the generations must be built from (main of each repository, ground truth included):
-#   lab-core d691415, lab-pricing ae47277 (tags v1.0.0 f502458, v1.1.0 1d4dba2), lab-intake 4017a1c,
-#   lab-leasing 958b62a, lab-web e21eef1.
+#   devos-lab-core e94350f, devos-lab-pricing d065a15 (tags v1.0.0 f502458, v1.1.0 1d4dba2), devos-lab-intake dbc7594,
+#   devos-lab-leasing 4ad16ff, devos-lab-web e21eef1.
 system: lab
 generations:
   - name: core          # packages Lab.Core.* (no service)
