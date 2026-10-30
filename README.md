@@ -10,7 +10,7 @@ See [docs/DESIGN.md](docs/DESIGN.md).
 generation it publishes (`oci`), the routes between them and how messages are identified. The `system-context`
 workflow ([`.github/workflows/system-context.yml`](.github/workflows/system-context.yml), script
 [`scripts/system-context.sh`](scripts/system-context.sh)) pulls those generations, federates and verifies them, and
-publishes the system generation to `ghcr.io/albertomitroi/context-systems` with the tags `lab-<inputs hash>` (immutable), `lab-main` and `lab.<repository>.<commit>` for every input (a working copy of a lab repository finds its system from its own commit). It runs
+publishes the system generation to `ghcr.io/albertomitroi/context-systems` with the tags `lab-<key>` (immutable; key over the inputs, system.yml and the federation version), `lab-main` and `lab.<repository>.<commit>` for every input (a working copy of a lab repository finds its system from its own commit). It runs
 when a lab repository's `context` workflow reports a new generation (`repository_dispatch`, needs the secret
 `DEVOS_LAB_DISPATCH_TOKEN` there) and by hand (`workflow_dispatch`). Layout and key:
 devos-intelligence-federation `docs/PUBLISHING.md`.

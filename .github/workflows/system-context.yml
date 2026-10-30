@@ -1,6 +1,6 @@
 # Publishes the lab system generation: pulls the generation every lab repository publishes for main
 # (ghcr.io/<owner>/context-devos-lab-*:main-<engine>, listed as `oci` in system.yml), federates and verifies them
-# with intelligence-federation, and pushes the result to ghcr.io/<owner>/context-systems as lab-<inputs hash>
+# with intelligence-federation, and pushes the result to ghcr.io/<owner>/context-systems as lab-<key>
 # (immutable), lab-main and lab.<repository>.<commit> per input (scripts/system-context.sh;
 # devos-intelligence-federation docs/PUBLISHING.md).
 name: system-context

@@ -10,14 +10,16 @@
 #   WORK     work directory (default .system-context, removed at start)
 #
 # Tags, all on one manifest (<system> is the name in system.yml):
-#   <system>-<64 hex>                  immutable: the hex of the system generation's input commit (`system:` over every
-#                                      input's name, commit and manifest digest)
+#   <system>-<64 hex>                  immutable: <key>, the SHA-256 of the system generation's input commit
+#                                      (`system:` over every input's name, commit and manifest digest), its
+#                                      configuration hash (system.yml) and the federation's name@version, joined by
+#                                      newlines: the same key means the same inputs, configuration and federation
 #   <system>-main                      moving: the newest system generation
 #   <system>.<repository>.<40 hex>     one per input: its repository name and commit, so a working copy finds the
 #                                      system that contains its commit with a single tag listing; moves to the newest
 #                                      system generation that contains that commit
-# An existing <system>-<64 hex> whose manifest.json differs (the same inputs federated with another system.yml or
-# another federation version) stops the run: the immutable tag is never overwritten.
+# An existing <system>-<key> whose manifest.json differs stops the run: the immutable tag is never overwritten (with
+# deterministic federation it cannot happen; it would mean a nondeterministic run).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -86,7 +88,8 @@ excluded="$(jq -r '[.inputs[] | select(.included | not) | .name] | join(", ")' "
 [ -z "$excluded" ] || { echo "inputs excluded by verification: $excluded (see inputs.ndjson); not publishing" >&2; exit 1; }
 system="$(jq -r .system "$manifest")"
 system_commit="$(jq -r .commit "$manifest")"
-tag="$system-${system_commit#system:}"
+key="$(jq -r '[.commit, .configurationHash, (.engine.name + "@" + .engine.version)] | join("\n")' "$manifest" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d ' ' -f 1)"
+tag="$system-$key"
 moving="$system-main"
 # One tag per input: <system>.<repository name>.<commit>; two engines on one repository and commit share it.
 input_tags="$(jq -r --arg system "$system" 'select(.included) | (.repository.remoteUrl // "" | sub("\\.git$"; "") | split("/") | last | ascii_downcase) as $repo
@@ -118,7 +121,7 @@ for t in $input_tags; do others="$others $t"; done
 if [ "$PUSH" = true ]; then
   if existing="$(oras_auth manifest fetch "$TARGET:$tag" 2>/dev/null)"; then
     previous="$(printf '%s' "$existing" | jq -r '.layers[0].annotations["dev.devos.intelligence.manifest-sha256"] // empty')"
-    [ "$previous" = "$manifest_sha" ] || { echo "$TARGET:$tag exists with manifest.json sha256 $previous, not $manifest_sha: the same inputs give another system generation (system.yml or federation changed); the immutable tag is not overwritten" >&2; exit 1; }
+    [ "$previous" = "$manifest_sha" ] || { echo "$TARGET:$tag exists with manifest.json sha256 $previous, not $manifest_sha: the same key gave another system generation; the immutable tag is not overwritten" >&2; exit 1; }
     echo "$TARGET:$tag already holds this system generation; moving the other tags only"
   else
     oras_auth push "$TARGET:$tag" "${push_args[@]}"
