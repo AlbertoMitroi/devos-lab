@@ -1,7 +1,8 @@
 # Publishes the lab system generation: pulls the generation every lab repository publishes for main
 # (ghcr.io/<owner>/context-devos-lab-*:main-<engine>, listed as `oci` in system.yml), federates and verifies them
-# with intelligence-federation, and pushes the result as ghcr.io/<owner>/context-devos-lab:system-<key> plus the
-# moving tag main-system (layout and key: scripts/system-context.sh; devos-intelligence-federation docs/PUBLISHING.md).
+# with intelligence-federation, and pushes the result to ghcr.io/<owner>/context-systems as lab-<inputs hash>
+# (immutable), lab-main and lab.<repository>.<commit> per input (scripts/system-context.sh;
+# devos-intelligence-federation docs/PUBLISHING.md).
 name: system-context
 
 on:
@@ -20,7 +21,7 @@ permissions:
   contents: read
   packages: write
 
-# Every run reads the moving main-* tags, so the newest pending run covers the ones it replaces.
+# Every run reads the moving main-<engine> tags, so the newest pending run covers the ones it replaces.
 concurrency:
   group: system-context
   cancel-in-progress: false
@@ -42,7 +43,7 @@ jobs:
       - name: Federate, verify and publish
         id: system
         env:
-          TARGET: ghcr.io/${{ github.repository_owner }}/context-devos-lab
+          TARGET: ghcr.io/${{ github.repository_owner }}/context-systems
           PUSH: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}

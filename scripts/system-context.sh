@@ -3,21 +3,25 @@
 # an OCI artifact with the engines' layout (devos-dotnet-intelligence docs/USAGE.md, "Publishing the generation (OCI)";
 # devos-intelligence-federation docs/PUBLISHING.md). Needs Docker and jq; runs the same in CI and on a workstation.
 #
-#   TARGET   repository of the system generation, for example ghcr.io/albertomitroi/context-devos-lab (required)
-#   PUSH     true: push to TARGET as system-<key> and main-system; anything else: write an OCI layout under
-#            $WORK/oci instead (dry run, default)
+#   TARGET   package of system generations (required), for example ghcr.io/albertomitroi/context-systems
+#   PUSH     true: push to TARGET; anything else: write an OCI layout under $WORK/oci instead (dry run, default)
 #   REGISTRY_USER, REGISTRY_TOKEN   credentials for the push (the inputs are public and pulled anonymously)
 #   FEDERATION_IMAGE, ORAS_IMAGE    pinned defaults below
 #   WORK     work directory (default .system-context, removed at start)
 #
-# <key> is the SHA-256 of the system generation's input commit (`system:` over every input's name, commit and
-# manifest digest), its configuration hash (system.yml) and the federation version: the same key means the same
-# inputs, configuration and federation, hence the same bytes. An existing system-<key> tag with other content stops
-# the run instead of being overwritten.
+# Tags, all on one manifest (<system> is the name in system.yml):
+#   <system>-<64 hex>                  immutable: the hex of the system generation's input commit (`system:` over every
+#                                      input's name, commit and manifest digest)
+#   <system>-main                      moving: the newest system generation
+#   <system>.<repository>.<40 hex>     one per input: its repository name and commit, so a working copy finds the
+#                                      system that contains its commit with a single tag listing; moves to the newest
+#                                      system generation that contains that commit
+# An existing <system>-<64 hex> whose manifest.json differs (the same inputs federated with another system.yml or
+# another federation version) stops the run: the immutable tag is never overwritten.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-TARGET="${TARGET:?set TARGET, for example ghcr.io/albertomitroi/context-devos-lab}"
+TARGET="${TARGET:?set TARGET, for example ghcr.io/albertomitroi/context-systems}"
 lower() { tr '[:upper:]' '[:lower:]'; }
 TARGET="$(printf '%s' "$TARGET" | lower)"
 PUSH="${PUSH:-false}"
@@ -56,7 +60,10 @@ while IFS=$'\t' read -r name ref; do
   mkdir -p "$work/inputs/$name"
   tar -xzf "$work/pull/$name/generation.tar.gz" -C "$work/inputs/$name"
   actual="$(sha256sum "$work/inputs/$name/manifest.json" 2>/dev/null | cut -d ' ' -f 1 || shasum -a 256 "$work/inputs/$name/manifest.json" | cut -d ' ' -f 1)"
-  [ -n "$expected" ] && [ "$expected" = "$actual" ] || { echo "$name: manifest.json sha256 $actual does not match the layer annotation '$expected'" >&2; exit 1; }
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    echo "$name: manifest.json sha256 $actual does not match the layer annotation '$expected'" >&2
+    exit 1
+  fi
   echo "$name  ${ref%:*}@$digest  manifest $actual"
   inputs+=(--input "$name=/generations/$name")
   pinned+=("$name=${ref%:*}@$digest")
@@ -74,11 +81,16 @@ step "pack"
 manifest="$work/out/system/manifest.json"
 status="$(jq -r .status "$manifest")"
 [ "$status" != failed ] || { echo "system generation status is failed" >&2; exit 1; }
-# A system generation with an excluded input is not published: it would replace main-system with less.
+# A system generation with an excluded input is not published: it would replace <system>-main with less.
 excluded="$(jq -r '[.inputs[] | select(.included | not) | .name] | join(", ")' "$manifest")"
 [ -z "$excluded" ] || { echo "inputs excluded by verification: $excluded (see inputs.ndjson); not publishing" >&2; exit 1; }
-key="$(jq -r '[.commit, .configurationHash, (.engine.name + "@" + .engine.version)] | join("\n")' "$manifest" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d ' ' -f 1)"
-tag="system-$key"
+system="$(jq -r .system "$manifest")"
+system_commit="$(jq -r .commit "$manifest")"
+tag="$system-${system_commit#system:}"
+moving="$system-main"
+# One tag per input: <system>.<repository name>.<commit>; two engines on one repository and commit share it.
+input_tags="$(jq -r --arg system "$system" 'select(.included) | (.repository.remoteUrl // "" | sub("\\.git$"; "") | split("/") | last | ascii_downcase) as $repo
+  | select($repo != "" and (.commit // "" | test("^[0-9a-f]{40}$"))) | "\($system).\($repo).\(.commit)"' "$work/out/system/inputs.ndjson" | sort -u)"
 manifest_sha="$({ sha256sum "$manifest" 2>/dev/null || shasum -a 256 "$manifest"; } | cut -d ' ' -f 1)"
 # Same generation, same bytes: sorted entries, fixed times and owners, no gzip timestamp (GNU tar of the image).
 docker run --rm --network none --user "$user" --entrypoint sh -v "$work/out:/out" "$FEDERATION_IMAGE" -c \
@@ -87,42 +99,52 @@ mv "$work/out/generation.tar.gz" "$work/generation.tar.gz"
 revision="${GITHUB_SHA:-$(git -C "$root" rev-parse HEAD)}"
 source="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-AlbertoMitroi/devos-lab}"
 jq -n --arg source "$source" --arg revision "$revision" --arg ref "${GITHUB_REF:-refs/heads/main}" \
-  --arg system "$(jq -r .commit "$manifest")" --arg inputs "${pinned[*]}" --arg image "$federation_digest" \
+  --arg system "$system" --arg commit "$system_commit" --arg inputs "${pinned[*]}" --arg image "$federation_digest" \
   --arg manifest "$manifest_sha" \
   '{"$manifest": {"org.opencontainers.image.source": $source, "org.opencontainers.image.revision": $revision,
                   "org.opencontainers.image.ref.name": $ref, "dev.devos.intelligence.engine": "intelligence-federation",
-                  "dev.devos.intelligence.system-commit": $system, "dev.devos.intelligence.inputs": $inputs,
+                  "dev.devos.intelligence.generation-type": "system", "dev.devos.intelligence.system": $system,
+                  "dev.devos.intelligence.system-commit": $commit, "dev.devos.intelligence.inputs": $inputs,
                   "dev.devos.intelligence.federation-image": $image},
     "generation.tar.gz": {"dev.devos.intelligence.manifest-sha256": $manifest}}' > "$work/annotations.json"
-echo "status $status, tag $tag, manifest.json sha256 $manifest_sha"
+echo "status $status, manifest.json sha256 $manifest_sha"
+echo "tags: $tag $moving $(printf '%s ' "$input_tags" | tr '\n' ' ')"
 
 step "publish"
 push_args=(--artifact-type "$ARTIFACT_TYPE" --annotation-file annotations.json "generation.tar.gz:$LAYER_TYPE")
+# The moving tags: <system>-main and one per input.
+others="$moving"
+for t in $input_tags; do others="$others $t"; done
 if [ "$PUSH" = true ]; then
   if existing="$(oras_auth manifest fetch "$TARGET:$tag" 2>/dev/null)"; then
     previous="$(printf '%s' "$existing" | jq -r '.layers[0].annotations["dev.devos.intelligence.manifest-sha256"] // empty')"
-    [ "$previous" = "$manifest_sha" ] || { echo "$TARGET:$tag exists with manifest.json sha256 $previous, not $manifest_sha: refusing to overwrite" >&2; exit 1; }
-    echo "$TARGET:$tag already holds this system generation; moving main-system only"
-    oras_auth tag "$TARGET:$tag" main-system
+    [ "$previous" = "$manifest_sha" ] || { echo "$TARGET:$tag exists with manifest.json sha256 $previous, not $manifest_sha: the same inputs give another system generation (system.yml or federation changed); the immutable tag is not overwritten" >&2; exit 1; }
+    echo "$TARGET:$tag already holds this system generation; moving the other tags only"
   else
-    oras_auth push "$TARGET:$tag,main-system" "${push_args[@]}"
+    oras_auth push "$TARGET:$tag" "${push_args[@]}"
   fi
+  # shellcheck disable=SC2086
+  oras_auth tag "$TARGET:$tag" $others
   digest="$(oras_auth resolve "$TARGET:$tag")"
-  where="$TARGET:$tag ($digest), main-system"
+  where="$TARGET:$tag ($digest)"
 else
   oras push --oci-layout "oci:$tag" "${push_args[@]}" >/dev/null
+  # shellcheck disable=SC2086
+  oras tag --oci-layout "oci:$tag" $others >/dev/null
   digest="$(oras resolve --oci-layout "oci:$tag")"
   where="OCI layout $work/oci:$tag ($digest); not pushed (PUSH=$PUSH)"
 fi
 echo "$where"
+echo "also tagged: $others"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   { echo "tag=$tag"; echo "digest=$digest"; echo "status=$status"; } >> "$GITHUB_OUTPUT"
 fi
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
-    echo "### System generation"
+    echo "### System generation $system"
     echo "- Published: $where"
-    echo "- Status: $status, system commit $(jq -r .commit "$manifest")"
+    echo "- Moving tags: $others"
+    echo "- Status: $status, system commit $system_commit"
     echo "- Inputs:"
     for p in "${pinned[@]}"; do echo "  - \`$p\`"; done
   } >> "$GITHUB_STEP_SUMMARY"
